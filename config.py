@@ -6,6 +6,11 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 EASTMONEY_API_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 ABAPI_URL = "https://youjia.abapi.cn"
 
+AMAP_KEY = os.environ.get("AMAP_KEY", "")
+AMAP_AROUND_URL = "https://restapi.amap.com/v3/place/around"
+AMAP_GEO_URL = "https://restapi.amap.com/v3/geocode/geo"
+AMAP_GAS_STATION_TYPE = "010100"
+
 REQUEST_TIMEOUT = 15
 REQUEST_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
