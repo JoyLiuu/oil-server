@@ -10,6 +10,5 @@ COPY . .
 EXPOSE 8000
 
 ENV PYTHONUNBUFFERED=1
-ENV AMAP_KEY=""
 
 CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8000", "--access-logfile", "-", "--error-logfile", "-", "--timeout", "30", "api:app"]

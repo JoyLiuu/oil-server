@@ -14,10 +14,6 @@ if ! command -v docker-compose &> /dev/null; then
     exit 1
 fi
 
-# 检查 AMAP_KEY
-if [ -z "$AMAP_KEY" ]; then
-    echo "警告: 未设置 AMAP_KEY 环境变量，加油站搜索功能将不可用"
-    echo "如需使用加油站搜索，请先执行: export AMAP_KEY=你的高德Key"
 fi
 
 # 构建并启动

@@ -6,10 +6,7 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 EASTMONEY_API_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 ABAPI_URL = "https://youjia.abapi.cn"
 
-AMAP_KEY = os.environ.get("AMAP_KEY", "")
-AMAP_AROUND_URL = "https://restapi.amap.com/v3/place/around"
-AMAP_GEO_URL = "https://restapi.amap.com/v3/geocode/geo"
-AMAP_GAS_STATION_TYPE = "010100"
+API_TOKEN = os.environ.get("API_TOKEN", "f8a3c9d1e7b24f5a9d8e6c3b1a7f0e2d9c4b6a5f8d1e3c2b7a9f0d4e6c8b3a1")
 
 REQUEST_TIMEOUT = 15
 REQUEST_HEADERS = {

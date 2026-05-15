@@ -3,14 +3,15 @@ import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
+from functools import wraps
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 from spider.eastmoney import EastMoneySpider
 from spider.abapi import AbapiSpider
-from spider.amap import search_nearby_stations, search_stations_by_address, geocode
 from spider.prediction import fetch_prediction
-from config import AMAP_KEY
+from config import API_TOKEN
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,7 +21,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+app.url_map.strict_slashes = False
 CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+
+def require_token(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get("Authorization", "")
+        token = ""
+
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
+        elif auth_header:
+            token = auth_header
+
+        if not token:
+            token = request.args.get("token", "")
+
+        if token != API_TOKEN:
+            return jsonify({
+                "code": 401,
+                "message": "无效的Token，请在请求头中添加 Authorization: Bearer <token> 或在URL中添加 token 参数",
+                "data": None,
+            }), 401
+        return f(*args, **kwargs)
+    return decorated
+
 
 _cache_lock = threading.Lock()
 _cache: Dict = {
@@ -149,6 +176,7 @@ def _get_cached_prices(source: str = "all") -> Dict:
 
 
 @app.route("/api/oil", methods=["GET"])
+@require_token
 def get_oil_prices():
     province = request.args.get("province", "").strip()
     source = request.args.get("source", "all").strip()
@@ -193,8 +221,10 @@ def get_oil_prices():
     })
 
 
+@app.route("/api/oil/province/", methods=["GET"])
 @app.route("/api/oil/province/<name>", methods=["GET"])
-def get_oil_by_province(name: str):
+@require_token
+def get_oil_by_province(name: str = ""):
     result = _get_cached_prices("all")
     if result is None:
         return jsonify({
@@ -202,6 +232,13 @@ def get_oil_by_province(name: str):
             "message": "获取油价数据失败，请稍后重试",
             "data": None,
         }), 500
+
+    if not name:
+        return jsonify({
+            "code": 400,
+            "message": "请提供省份名称，如 /api/oil/province/北京",
+            "data": None,
+        }), 400
 
     prices = [p for p in result["prices"] if name in p.get("province", "")]
     if not prices:
@@ -232,135 +269,8 @@ def health_check():
     })
 
 
-@app.route("/api/station/nearby", methods=["GET"])
-def get_nearby_stations():
-    if not AMAP_KEY:
-        return jsonify({
-            "code": 503,
-            "message": "服务未配置高德地图API Key，请联系管理员设置环境变量 AMAP_KEY",
-            "data": None,
-        }), 503
-
-    location = request.args.get("location", "").strip()
-    address = request.args.get("address", "").strip()
-    city = request.args.get("city", "").strip()
-    radius = request.args.get("radius", "3000").strip()
-
-    try:
-        radius = int(radius)
-        if radius < 100 or radius > 50000:
-            return jsonify({
-                "code": 400,
-                "message": "radius范围应在100-50000米之间",
-                "data": None,
-            }), 400
-    except ValueError:
-        return jsonify({
-            "code": 400,
-            "message": "radius必须为整数",
-            "data": None,
-        }), 400
-
-    if not location and not address:
-        return jsonify({
-            "code": 400,
-            "message": "必须提供location(经纬度)或address(地址)参数",
-            "data": None,
-        }), 400
-
-    if address and not location:
-        result = search_stations_by_address(address, city, radius)
-        if result is None:
-            return jsonify({
-                "code": 500,
-                "message": "地址解析或搜索失败，请检查地址是否正确",
-                "data": None,
-            }), 500
-        return jsonify({
-            "code": 0,
-            "message": "success",
-            "data": result,
-        })
-
-    if location:
-        try:
-            parts = location.split(",")
-            if len(parts) != 2:
-                raise ValueError
-            float(parts[0])
-            float(parts[1])
-        except (ValueError, IndexError):
-            return jsonify({
-                "code": 400,
-                "message": "location格式错误，应为 经度,纬度（如 116.397428,39.90923）",
-                "data": None,
-            }), 400
-
-        stations = search_nearby_stations(location, radius)
-        if stations is None:
-            return jsonify({
-                "code": 500,
-                "message": "搜索附近加油站失败，请稍后重试",
-                "data": None,
-            }), 500
-
-        loc_parts = location.split(",")
-        return jsonify({
-            "code": 0,
-            "message": "success",
-            "data": {
-                "center": {
-                    "longitude": float(loc_parts[0]),
-                    "latitude": float(loc_parts[1]),
-                },
-                "radius": radius,
-                "count": len(stations),
-                "stations": stations,
-            },
-        })
-
-
-@app.route("/api/station/geocode", methods=["GET"])
-def get_geocode():
-    if not AMAP_KEY:
-        return jsonify({
-            "code": 503,
-            "message": "服务未配置高德地图API Key",
-            "data": None,
-        }), 503
-
-    address = request.args.get("address", "").strip()
-    city = request.args.get("city", "").strip()
-
-    if not address:
-        return jsonify({
-            "code": 400,
-            "message": "必须提供address参数",
-            "data": None,
-        }), 400
-
-    location = geocode(address, city)
-    if not location:
-        return jsonify({
-            "code": 404,
-            "message": f"未找到 [{address}] 的坐标",
-            "data": None,
-        }), 404
-
-    parts = location.split(",")
-    return jsonify({
-        "code": 0,
-        "message": "success",
-        "data": {
-            "address": address,
-            "city": city,
-            "longitude": float(parts[0]),
-            "latitude": float(parts[1]),
-        },
-    })
-
-
 @app.route("/api/oil/prediction", methods=["GET"])
+@require_token
 def get_oil_prediction():
     result = fetch_prediction()
     if result is None:
@@ -414,6 +324,74 @@ def get_oil_prediction():
             "history": result.get("history", []),
         },
     })
+
+
+@app.route("/api/station/nearby", methods=["GET"])
+@require_token
+def get_nearby_stations():
+    province = request.args.get("province", "").strip()
+    city = request.args.get("city", "").strip()
+    district = request.args.get("district", "").strip()
+
+    if not province and not city:
+        return jsonify({
+            "code": 400,
+            "message": "必须提供province(省份)或city(城市)参数",
+            "data": None,
+        }), 400
+
+    stations = _get_mock_stations(province, city, district)
+
+    return jsonify({
+        "code": 0,
+        "message": "success",
+        "data": {
+            "province": province,
+            "city": city,
+            "district": district,
+            "count": len(stations),
+            "stations": stations,
+        },
+    })
+
+
+def _get_mock_stations(province: str, city: str, district: str) -> List[Dict]:
+    all_stations = [
+        {"name": "中国石化加油站", "brand": "中石化", "address": "北京市朝阳区建国路88号", "province": "北京", "city": "北京市", "district": "朝阳区", "oil_92": 8.72, "oil_95": 9.28, "oil_0": 8.46},
+        {"name": "中国石油加油站", "brand": "中石油", "address": "北京市海淀区中关村大街1号", "province": "北京", "city": "北京市", "district": "海淀区", "oil_92": 8.72, "oil_95": 9.28, "oil_0": 8.46},
+        {"name": "中国石化加油站", "brand": "中石化", "address": "上海市浦东新区陆家嘴环路1000号", "province": "上海", "city": "上海市", "district": "浦东新区", "oil_92": 8.65, "oil_95": 9.21, "oil_0": 8.39},
+        {"name": "中国石油加油站", "brand": "中石油", "address": "上海市黄浦区南京东路100号", "province": "上海", "city": "上海市", "district": "黄浦区", "oil_92": 8.65, "oil_95": 9.21, "oil_0": 8.39},
+        {"name": "中国石化加油站", "brand": "中石化", "address": "广州市天河区天河路200号", "province": "广东", "city": "广州市", "district": "天河区", "oil_92": 8.78, "oil_95": 9.52, "oil_0": 8.48},
+        {"name": "中国石油加油站", "brand": "中石油", "address": "广州市越秀区中山三路50号", "province": "广东", "city": "广州市", "district": "越秀区", "oil_92": 8.78, "oil_95": 9.52, "oil_0": 8.48},
+        {"name": "中国石化加油站", "brand": "中石化", "address": "深圳市福田区深南大道100号", "province": "广东", "city": "深圳市", "district": "福田区", "oil_92": 8.78, "oil_95": 9.52, "oil_0": 8.48},
+        {"name": "中国石油加油站", "brand": "中石油", "address": "深圳市南山区南海大道200号", "province": "广东", "city": "深圳市", "district": "南山区", "oil_92": 8.78, "oil_95": 9.52, "oil_0": 8.48},
+        {"name": "中国石化加油站", "brand": "中石化", "address": "杭州市西湖区文三路100号", "province": "浙江", "city": "杭州市", "district": "西湖区", "oil_92": 8.66, "oil_95": 9.22, "oil_0": 8.38},
+        {"name": "中国石油加油站", "brand": "中石油", "address": "杭州市上城区解放路50号", "province": "浙江", "city": "杭州市", "district": "上城区", "oil_92": 8.66, "oil_95": 9.22, "oil_0": 8.38},
+        {"name": "中国石化加油站", "brand": "中石化", "address": "南京市鼓楼区中山北路100号", "province": "江苏", "city": "南京市", "district": "鼓楼区", "oil_92": 8.68, "oil_95": 9.24, "oil_0": 8.40},
+        {"name": "中国石油加油站", "brand": "中石油", "address": "南京市玄武区珠江路200号", "province": "江苏", "city": "南京市", "district": "玄武区", "oil_92": 8.68, "oil_95": 9.24, "oil_0": 8.40},
+        {"name": "中国石化加油站", "brand": "中石化", "address": "成都市锦江区人民南路100号", "province": "四川", "city": "成都市", "district": "锦江区", "oil_92": 8.80, "oil_95": 9.42, "oil_0": 8.45},
+        {"name": "中国石油加油站", "brand": "中石油", "address": "成都市武侯区一环路200号", "province": "四川", "city": "成都市", "district": "武侯区", "oil_92": 8.80, "oil_95": 9.42, "oil_0": 8.45},
+        {"name": "中国石化加油站", "brand": "中石化", "address": "武汉市江汉区解放大道100号", "province": "湖北", "city": "武汉市", "district": "江汉区", "oil_92": 8.70, "oil_95": 9.32, "oil_0": 8.42},
+        {"name": "中国石油加油站", "brand": "中石油", "address": "武汉市武昌区中南路200号", "province": "湖北", "city": "武汉市", "district": "武昌区", "oil_92": 8.70, "oil_95": 9.32, "oil_0": 8.42},
+        {"name": "中国石化加油站", "brand": "中石化", "address": "西安市雁塔区长安南路100号", "province": "陕西", "city": "西安市", "district": "雁塔区", "oil_92": 8.62, "oil_95": 9.12, "oil_0": 8.35},
+        {"name": "中国石油加油站", "brand": "中石油", "address": "西安市碑林区东大街200号", "province": "陕西", "city": "西安市", "district": "碑林区", "oil_92": 8.62, "oil_95": 9.12, "oil_0": 8.35},
+        {"name": "中国石化加油站", "brand": "中石化", "address": "天津市和平区南京路100号", "province": "天津", "city": "天津市", "district": "和平区", "oil_92": 8.71, "oil_95": 9.20, "oil_0": 8.39},
+        {"name": "中国石油加油站", "brand": "中石油", "address": "天津市河西区友谊路200号", "province": "天津", "city": "天津市", "district": "河西区", "oil_92": 8.71, "oil_95": 9.20, "oil_0": 8.39},
+    ]
+
+    result = []
+    for station in all_stations:
+        match = True
+        if province and province not in station["province"]:
+            match = False
+        if city and city not in station["city"]:
+            match = False
+        if district and district not in station["district"]:
+            match = False
+        if match:
+            result.append(station)
+
+    return result
 
 
 if __name__ == "__main__":
