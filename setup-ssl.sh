@@ -15,7 +15,7 @@ fi
 export PATH="$HOME/.acme.sh:$PATH"
 
 # 申请证书（standalone 模式，需临时释放 80 端口）
-echo "停止 nginx 容器以释放 80 端口..."
+echo "停止 nginx 容器以释放 8443 端口..."
 docker stop wx-oil-nginx 2>/dev/null || true
 
 echo "申请证书..."
