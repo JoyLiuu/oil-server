@@ -9,19 +9,22 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-if ! command -v docker-compose &> /dev/null; then
+DC="docker compose"
+if docker compose version &> /dev/null; then
+    DC="docker compose"
+elif command -v docker-compose &> /dev/null; then
+    DC="docker-compose"
+else
     echo "错误: Docker Compose 未安装"
     exit 1
 fi
 
-fi
-
 # 构建并启动
 echo "正在构建镜像..."
-docker-compose build --no-cache
+$DC build --no-cache
 
 echo "正在启动服务..."
-docker-compose up -d
+$DC up -d
 
 echo "等待服务启动..."
 sleep 5
@@ -42,10 +45,10 @@ if curl -s http://localhost:8000/api/health > /dev/null; then
     echo "  - 省份油价: GET /api/oil/province/:name"
     echo "  - 附近加油站: GET /api/station/nearby"
     echo ""
-    echo "查看日志: docker-compose logs -f"
-    echo "停止服务: docker-compose down"
+    echo "查看日志: $DC logs -f"
+    echo "停止服务: $DC down"
 else
     echo "❌ 服务启动失败，查看日志:"
-    docker-compose logs
+    $DC logs
     exit 1
 fi

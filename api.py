@@ -1,4 +1,5 @@
 import logging
+import math
 import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -85,14 +86,18 @@ def _normalize_prices(prices: List[Dict]) -> List[Dict]:
     return result
 
 
+def _norm_province(name: str) -> str:
+    return name.replace("省", "").replace("市", "").replace("壮族", "").replace("回族", "").replace("维吾尔", "").replace("自治区", "").strip()
+
+
 def _merge_oil_98(eastmoney_prices: List[Dict], abapi_prices: List[Dict]) -> List[Dict]:
     if not abapi_prices:
         return eastmoney_prices
 
-    abapi_map = {p["province"]: p for p in abapi_prices if p.get("province")}
+    abapi_map = {_norm_province(p["province"]): p for p in abapi_prices if p.get("province")}
 
     for item in eastmoney_prices:
-        province = item.get("province", "")
+        province = _norm_province(item.get("province", ""))
         ab_item = abapi_map.get(province)
         if ab_item:
             if "oil_98" in ab_item and ab_item["oil_98"] is not None:
@@ -289,12 +294,10 @@ def get_oil_prediction():
     }
     trend_label = trend_map.get(trend, "待定")
 
-    change_rate = result.get("change_rate")
-    confidence = None
-    if change_rate is not None:
-        confidence = min(abs(change_rate) * 10, 99)
-        if confidence < 5:
-            confidence = 5
+    change_rate = result.get("change_rate") or 0
+    confidence = min(abs(change_rate) * 10, 99)
+    if confidence < 5:
+        confidence = 5
 
     status = trend if trend else "unknown"
     forecast = trend_label
@@ -326,6 +329,37 @@ def get_oil_prediction():
     })
 
 
+def _haversine(lng1: float, lat1: float, lng2: float, lat2: float) -> float:
+    d_lat = math.radians(lat2 - lat1)
+    d_lng = math.radians(lng2 - lng1)
+    a = math.sin(d_lat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lng / 2) ** 2
+    return 6371000 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+ALL_STATIONS = [
+    {"id": 1, "name": "中国石化加油站（朝阳站）", "brand": "中石化", "address": "北京市朝阳区建国路88号", "province": "北京", "city": "北京市", "district": "朝阳区", "longitude": 116.461, "latitude": 39.908, "tel": "010-88886666", "oil_92": 8.72, "oil_95": 9.28, "oil_0": 8.46},
+    {"id": 2, "name": "中国石油加油站（海淀站）", "brand": "中石油", "address": "北京市海淀区中关村大街1号", "province": "北京", "city": "北京市", "district": "海淀区", "longitude": 116.310, "latitude": 39.984, "tel": "010-66668888", "oil_92": 8.72, "oil_95": 9.28, "oil_0": 8.46},
+    {"id": 3, "name": "中国石化加油站（浦东站）", "brand": "中石化", "address": "上海市浦东新区陆家嘴环路1000号", "province": "上海", "city": "上海市", "district": "浦东新区", "longitude": 121.505, "latitude": 31.240, "tel": "021-58880000", "oil_92": 8.65, "oil_95": 9.21, "oil_0": 8.39},
+    {"id": 4, "name": "中国石油加油站（黄浦站）", "brand": "中石油", "address": "上海市黄浦区南京东路100号", "province": "上海", "city": "上海市", "district": "黄浦区", "longitude": 121.474, "latitude": 31.232, "tel": "021-63220000", "oil_92": 8.65, "oil_95": 9.21, "oil_0": 8.39},
+    {"id": 5, "name": "中国石化加油站（天河站）", "brand": "中石化", "address": "广州市天河区天河路200号", "province": "广东", "city": "广州市", "district": "天河区", "longitude": 113.322, "latitude": 23.129, "tel": "020-85550000", "oil_92": 8.78, "oil_95": 9.52, "oil_0": 8.48},
+    {"id": 6, "name": "中国石油加油站（越秀站）", "brand": "中石油", "address": "广州市越秀区中山三路50号", "province": "广东", "city": "广州市", "district": "越秀区", "longitude": 113.269, "latitude": 23.128, "tel": "020-87770000", "oil_92": 8.78, "oil_95": 9.52, "oil_0": 8.48},
+    {"id": 7, "name": "中国石化加油站（福田站）", "brand": "中石化", "address": "深圳市福田区深南大道100号", "province": "广东", "city": "深圳市", "district": "福田区", "longitude": 114.054, "latitude": 22.541, "tel": "0755-82800000", "oil_92": 8.78, "oil_95": 9.52, "oil_0": 8.48},
+    {"id": 8, "name": "中国石油加油站（南山站）", "brand": "中石油", "address": "深圳市南山区南海大道200号", "province": "广东", "city": "深圳市", "district": "南山区", "longitude": 113.920, "latitude": 22.536, "tel": "0755-26660000", "oil_92": 8.78, "oil_95": 9.52, "oil_0": 8.48},
+    {"id": 9, "name": "中国石化加油站（西湖站）", "brand": "中石化", "address": "杭州市西湖区文三路100号", "province": "浙江", "city": "杭州市", "district": "西湖区", "longitude": 120.128, "latitude": 30.274, "tel": "0571-88880000", "oil_92": 8.66, "oil_95": 9.22, "oil_0": 8.38},
+    {"id": 10, "name": "中国石油加油站（上城站）", "brand": "中石油", "address": "杭州市上城区解放路50号", "province": "浙江", "city": "杭州市", "district": "上城区", "longitude": 120.172, "latitude": 30.250, "tel": "0571-87780000", "oil_92": 8.66, "oil_95": 9.22, "oil_0": 8.38},
+    {"id": 11, "name": "中国石化加油站（鼓楼站）", "brand": "中石化", "address": "南京市鼓楼区中山北路100号", "province": "江苏", "city": "南京市", "district": "鼓楼区", "longitude": 118.785, "latitude": 32.076, "tel": "025-83300000", "oil_92": 8.68, "oil_95": 9.24, "oil_0": 8.40},
+    {"id": 12, "name": "中国石油加油站（玄武站）", "brand": "中石油", "address": "南京市玄武区珠江路200号", "province": "江苏", "city": "南京市", "district": "玄武区", "longitude": 118.792, "latitude": 32.052, "tel": "025-86800000", "oil_92": 8.68, "oil_95": 9.24, "oil_0": 8.40},
+    {"id": 13, "name": "中国石化加油站（锦江站）", "brand": "中石化", "address": "成都市锦江区人民南路100号", "province": "四川", "city": "成都市", "district": "锦江区", "longitude": 104.081, "latitude": 30.656, "tel": "028-86660000", "oil_92": 8.80, "oil_95": 9.42, "oil_0": 8.45},
+    {"id": 14, "name": "中国石油加油站（武侯站）", "brand": "中石油", "address": "成都市武侯区一环路200号", "province": "四川", "city": "成都市", "district": "武侯区", "longitude": 104.055, "latitude": 30.637, "tel": "028-85500000", "oil_92": 8.80, "oil_95": 9.42, "oil_0": 8.45},
+    {"id": 15, "name": "中国石化加油站（江汉站）", "brand": "中石化", "address": "武汉市江汉区解放大道100号", "province": "湖北", "city": "武汉市", "district": "江汉区", "longitude": 114.278, "latitude": 30.595, "tel": "027-85780000", "oil_92": 8.70, "oil_95": 9.32, "oil_0": 8.42},
+    {"id": 16, "name": "中国石油加油站（武昌站）", "brand": "中石油", "address": "武汉市武昌区中南路200号", "province": "湖北", "city": "武汉市", "district": "武昌区", "longitude": 114.330, "latitude": 30.543, "tel": "027-87270000", "oil_92": 8.70, "oil_95": 9.32, "oil_0": 8.42},
+    {"id": 17, "name": "中国石化加油站（雁塔站）", "brand": "中石化", "address": "西安市雁塔区长安南路100号", "province": "陕西", "city": "西安市", "district": "雁塔区", "longitude": 108.942, "latitude": 34.219, "tel": "029-85250000", "oil_92": 8.62, "oil_95": 9.12, "oil_0": 8.35},
+    {"id": 18, "name": "中国石油加油站（碑林站）", "brand": "中石油", "address": "西安市碑林区东大街200号", "province": "陕西", "city": "西安市", "district": "碑林区", "longitude": 108.960, "latitude": 34.257, "tel": "029-87280000", "oil_92": 8.62, "oil_95": 9.12, "oil_0": 8.35},
+    {"id": 19, "name": "中国石化加油站（和平站）", "brand": "中石化", "address": "天津市和平区南京路100号", "province": "天津", "city": "天津市", "district": "和平区", "longitude": 117.205, "latitude": 39.117, "tel": "022-23300000", "oil_92": 8.71, "oil_95": 9.20, "oil_0": 8.39},
+    {"id": 20, "name": "中国石油加油站（河西站）", "brand": "中石油", "address": "天津市河西区友谊路200号", "province": "天津", "city": "天津市", "district": "河西区", "longitude": 117.212, "latitude": 39.107, "tel": "022-28350000", "oil_92": 8.71, "oil_95": 9.20, "oil_0": 8.39},
+]
+
+
 @app.route("/api/station/nearby", methods=["GET"])
 @require_token
 def get_nearby_stations():
@@ -333,54 +367,20 @@ def get_nearby_stations():
     city = request.args.get("city", "").strip()
     district = request.args.get("district", "").strip()
 
-    if not province and not city:
-        return jsonify({
-            "code": 400,
-            "message": "必须提供province(省份)或city(城市)参数",
-            "data": None,
-        }), 400
+    try:
+        user_lng = float(request.args.get("longitude", 0))
+        user_lat = float(request.args.get("latitude", 0))
+    except (ValueError, TypeError):
+        user_lng, user_lat = 0, 0
 
-    stations = _get_mock_stations(province, city, district)
-
-    return jsonify({
-        "code": 0,
-        "message": "success",
-        "data": {
-            "province": province,
-            "city": city,
-            "district": district,
-            "count": len(stations),
-            "stations": stations,
-        },
-    })
-
-
-def _get_mock_stations(province: str, city: str, district: str) -> List[Dict]:
-    all_stations = [
-        {"name": "中国石化加油站", "brand": "中石化", "address": "北京市朝阳区建国路88号", "province": "北京", "city": "北京市", "district": "朝阳区", "oil_92": 8.72, "oil_95": 9.28, "oil_0": 8.46},
-        {"name": "中国石油加油站", "brand": "中石油", "address": "北京市海淀区中关村大街1号", "province": "北京", "city": "北京市", "district": "海淀区", "oil_92": 8.72, "oil_95": 9.28, "oil_0": 8.46},
-        {"name": "中国石化加油站", "brand": "中石化", "address": "上海市浦东新区陆家嘴环路1000号", "province": "上海", "city": "上海市", "district": "浦东新区", "oil_92": 8.65, "oil_95": 9.21, "oil_0": 8.39},
-        {"name": "中国石油加油站", "brand": "中石油", "address": "上海市黄浦区南京东路100号", "province": "上海", "city": "上海市", "district": "黄浦区", "oil_92": 8.65, "oil_95": 9.21, "oil_0": 8.39},
-        {"name": "中国石化加油站", "brand": "中石化", "address": "广州市天河区天河路200号", "province": "广东", "city": "广州市", "district": "天河区", "oil_92": 8.78, "oil_95": 9.52, "oil_0": 8.48},
-        {"name": "中国石油加油站", "brand": "中石油", "address": "广州市越秀区中山三路50号", "province": "广东", "city": "广州市", "district": "越秀区", "oil_92": 8.78, "oil_95": 9.52, "oil_0": 8.48},
-        {"name": "中国石化加油站", "brand": "中石化", "address": "深圳市福田区深南大道100号", "province": "广东", "city": "深圳市", "district": "福田区", "oil_92": 8.78, "oil_95": 9.52, "oil_0": 8.48},
-        {"name": "中国石油加油站", "brand": "中石油", "address": "深圳市南山区南海大道200号", "province": "广东", "city": "深圳市", "district": "南山区", "oil_92": 8.78, "oil_95": 9.52, "oil_0": 8.48},
-        {"name": "中国石化加油站", "brand": "中石化", "address": "杭州市西湖区文三路100号", "province": "浙江", "city": "杭州市", "district": "西湖区", "oil_92": 8.66, "oil_95": 9.22, "oil_0": 8.38},
-        {"name": "中国石油加油站", "brand": "中石油", "address": "杭州市上城区解放路50号", "province": "浙江", "city": "杭州市", "district": "上城区", "oil_92": 8.66, "oil_95": 9.22, "oil_0": 8.38},
-        {"name": "中国石化加油站", "brand": "中石化", "address": "南京市鼓楼区中山北路100号", "province": "江苏", "city": "南京市", "district": "鼓楼区", "oil_92": 8.68, "oil_95": 9.24, "oil_0": 8.40},
-        {"name": "中国石油加油站", "brand": "中石油", "address": "南京市玄武区珠江路200号", "province": "江苏", "city": "南京市", "district": "玄武区", "oil_92": 8.68, "oil_95": 9.24, "oil_0": 8.40},
-        {"name": "中国石化加油站", "brand": "中石化", "address": "成都市锦江区人民南路100号", "province": "四川", "city": "成都市", "district": "锦江区", "oil_92": 8.80, "oil_95": 9.42, "oil_0": 8.45},
-        {"name": "中国石油加油站", "brand": "中石油", "address": "成都市武侯区一环路200号", "province": "四川", "city": "成都市", "district": "武侯区", "oil_92": 8.80, "oil_95": 9.42, "oil_0": 8.45},
-        {"name": "中国石化加油站", "brand": "中石化", "address": "武汉市江汉区解放大道100号", "province": "湖北", "city": "武汉市", "district": "江汉区", "oil_92": 8.70, "oil_95": 9.32, "oil_0": 8.42},
-        {"name": "中国石油加油站", "brand": "中石油", "address": "武汉市武昌区中南路200号", "province": "湖北", "city": "武汉市", "district": "武昌区", "oil_92": 8.70, "oil_95": 9.32, "oil_0": 8.42},
-        {"name": "中国石化加油站", "brand": "中石化", "address": "西安市雁塔区长安南路100号", "province": "陕西", "city": "西安市", "district": "雁塔区", "oil_92": 8.62, "oil_95": 9.12, "oil_0": 8.35},
-        {"name": "中国石油加油站", "brand": "中石油", "address": "西安市碑林区东大街200号", "province": "陕西", "city": "西安市", "district": "碑林区", "oil_92": 8.62, "oil_95": 9.12, "oil_0": 8.35},
-        {"name": "中国石化加油站", "brand": "中石化", "address": "天津市和平区南京路100号", "province": "天津", "city": "天津市", "district": "和平区", "oil_92": 8.71, "oil_95": 9.20, "oil_0": 8.39},
-        {"name": "中国石油加油站", "brand": "中石油", "address": "天津市河西区友谊路200号", "province": "天津", "city": "天津市", "district": "河西区", "oil_92": 8.71, "oil_95": 9.20, "oil_0": 8.39},
-    ]
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+        limit = max(1, min(100, int(request.args.get("limit", 20))))
+    except (ValueError, TypeError):
+        page, limit = 1, 20
 
     result = []
-    for station in all_stations:
+    for station in ALL_STATIONS:
         match = True
         if province and province not in station["province"]:
             match = False
@@ -389,9 +389,29 @@ def _get_mock_stations(province: str, city: str, district: str) -> List[Dict]:
         if district and district not in station["district"]:
             match = False
         if match:
-            result.append(station)
+            s = dict(station)
+            if user_lng and user_lat:
+                s["distance"] = round(_haversine(user_lng, user_lat, s["longitude"], s["latitude"]))
+            else:
+                s["distance"] = 0
+            result.append(s)
 
-    return result
+    result.sort(key=lambda s: s["distance"])
+    total = len(result)
+    start = (page - 1) * limit
+    paged = result[start:start + limit]
+
+    return jsonify({
+        "code": 0,
+        "message": "success",
+        "data": {
+            "province": province,
+            "city": city,
+            "district": district,
+            "total": total,
+            "stations": paged,
+        },
+    })
 
 
 if __name__ == "__main__":
