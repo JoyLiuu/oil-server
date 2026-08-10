@@ -1,5 +1,4 @@
 import logging
-import math
 import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -12,6 +11,9 @@ from flask_cors import CORS
 from spider.eastmoney import EastMoneySpider
 from spider.abapi import AbapiSpider
 from spider.prediction import fetch_prediction
+from spider.geocoder import coords_to_province, coords_to_city
+from spider.poi import search_nearby_gas_stations
+from spider.utils import haversine
 from config import API_TOKEN
 
 logging.basicConfig(
@@ -185,6 +187,8 @@ def _get_cached_prices(source: str = "all") -> Dict:
 def get_oil_prices():
     province = request.args.get("province", "").strip()
     source = request.args.get("source", "all").strip()
+    longitude = request.args.get("longitude", "").strip()
+    latitude = request.args.get("latitude", "").strip()
 
     if source not in ("all", "eastmoney", "abapi"):
         return jsonify({
@@ -192,6 +196,25 @@ def get_oil_prices():
             "message": "无效的source参数，可选值: all, eastmoney, abapi",
             "data": None,
         }), 400
+
+    if longitude and latitude:
+        try:
+            lng = float(longitude)
+            lat = float(latitude)
+            province = coords_to_province(lng, lat)
+            if not province:
+                return jsonify({
+                    "code": 400,
+                    "message": "无法根据经纬度确定省份，请检查坐标是否在中国境内",
+                    "data": None,
+                }), 400
+            logger.info(f"[API] 经纬度 ({lng}, {lat}) 转换为省份: {province}")
+        except (ValueError, TypeError):
+            return jsonify({
+                "code": 400,
+                "message": "经纬度参数格式错误，请提供有效的数字",
+                "data": None,
+            }), 400
 
     result = _get_cached_prices(source)
     if result is None:
@@ -204,8 +227,6 @@ def get_oil_prices():
     prices = result["prices"]
 
     if province:
-        from urllib.parse import unquote
-        province = unquote(province)
         prices = [p for p in prices if province in p.get("province", "")]
         if not prices:
             return jsonify({
@@ -220,6 +241,7 @@ def get_oil_prices():
         "data": {
             "update_time": result["update_time"],
             "source": result["source"],
+            "province": province if province else "全国",
             "count": len(prices),
             "prices": prices,
         },
@@ -265,6 +287,47 @@ def get_oil_by_province(name: str = ""):
     })
 
 
+@app.route("/api/geocode", methods=["GET"])
+@require_token
+def geocode():
+    try:
+        lng = float(request.args.get("longitude", 0))
+        lat = float(request.args.get("latitude", 0))
+    except (ValueError, TypeError):
+        return jsonify({
+            "code": 400,
+            "message": "经纬度参数格式错误",
+            "data": None,
+        }), 400
+
+    if lng == 0 and lat == 0:
+        return jsonify({
+            "code": 400,
+            "message": "请提供有效的经纬度参数",
+            "data": None,
+        }), 400
+
+    result = coords_to_city(lng, lat)
+    if not result:
+        return jsonify({
+            "code": 404,
+            "message": "无法根据经纬度确定位置，请检查坐标是否在中国境内",
+            "data": None,
+        }), 404
+
+    logger.info(f"[API] 经纬度 ({lng}, {lat}) -> 省份: {result['province']}, 城市: {result['city']}")
+
+    return jsonify({
+        "code": 0,
+        "message": "success",
+        "data": {
+            "province": result["province"],
+            "city": result["city"],
+            "district": result.get("district", ""),
+        },
+    })
+
+
 @app.route("/api/health", methods=["GET"])
 def health_check():
     return jsonify({
@@ -305,6 +368,17 @@ def get_oil_prediction():
     predict_gasoline = result.get("predict_gasoline_change")
     predict_diesel = result.get("predict_diesel_change")
 
+    # 距下次调价天数（next_window_date 形如 "2026-08-14 24:00"）
+    days_remaining = None
+    next_window_date = result.get("next_window_date", "")
+    if next_window_date:
+        date_part = str(next_window_date).split(" ")[0]
+        try:
+            target = datetime.strptime(date_part, "%Y-%m-%d").date()
+            days_remaining = max(0, (target - datetime.now().date()).days)
+        except ValueError:
+            pass
+
     return jsonify({
         "code": 0,
         "message": "success",
@@ -316,7 +390,8 @@ def get_oil_prediction():
             "confidence": confidence,
             "change_rate": change_rate,
             "prediction_text": result.get("prediction_text", ""),
-            "next_window_date": result.get("next_window_date", ""),
+            "next_window_date": next_window_date,
+            "days_remaining": days_remaining,
             "last_adjust_date": result.get("last_adjust_date", ""),
             "last_gasoline_price": result.get("last_gasoline_price"),
             "last_diesel_price": result.get("last_diesel_price"),
@@ -327,13 +402,6 @@ def get_oil_prediction():
             "history": result.get("history", []),
         },
     })
-
-
-def _haversine(lng1: float, lat1: float, lng2: float, lat2: float) -> float:
-    d_lat = math.radians(lat2 - lat1)
-    d_lng = math.radians(lng2 - lng1)
-    a = math.sin(d_lat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lng / 2) ** 2
-    return 6371000 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 ALL_STATIONS = [
@@ -379,6 +447,41 @@ def get_nearby_stations():
     except (ValueError, TypeError):
         page, limit = 1, 20
 
+    radius = request.args.get("radius")
+    if radius:
+        try:
+            radius = int(radius)
+        except (ValueError, TypeError):
+            radius = None
+
+    # 未传位置名称时，用坐标反查省份/城市，保证前端能展示具体城市
+    if (not province and not city and user_lng and user_lat):
+        geo = coords_to_city(user_lng, user_lat)
+        if geo:
+            province = geo.get("province", "") or province
+            city = geo.get("city", "") or city
+            district = geo.get("district", "") or district
+
+    # 优先使用真实 POI 数据源（需配置 TENCENT_MAP_KEY）
+    if user_lng and user_lat:
+        poi_result = search_nearby_gas_stations(
+            user_lng, user_lat, radius=radius, page=page, limit=limit
+        )
+        if poi_result is not None:
+            return jsonify({
+                "code": 0,
+                "message": "success",
+                "data": {
+                    "province": province,
+                    "city": city,
+                    "district": district,
+                    "total": poi_result["total"],
+                    "stations": poi_result["stations"],
+                    "source": "tencent",
+                },
+            })
+        logger.warning("[API] POI 数据源不可用，回退到内置静态数据")
+
     result = []
     for station in ALL_STATIONS:
         match = True
@@ -391,7 +494,7 @@ def get_nearby_stations():
         if match:
             s = dict(station)
             if user_lng and user_lat:
-                s["distance"] = round(_haversine(user_lng, user_lat, s["longitude"], s["latitude"]))
+                s["distance"] = round(haversine(user_lng, user_lat, s["longitude"], s["latitude"]))
             else:
                 s["distance"] = 0
             result.append(s)
@@ -410,6 +513,7 @@ def get_nearby_stations():
             "district": district,
             "total": total,
             "stations": paged,
+            "source": "static",
         },
     })
 

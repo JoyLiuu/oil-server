@@ -23,14 +23,12 @@ echo ""
 echo "[1/5] 正在本地打包代码..."
 cd "$(dirname "$0")"
 tar czvf /tmp/oil-server-deploy.tar.gz \
-    --exclude='data/*.json' \
-    --exclude='data/*.csv' \
     --exclude='__pycache__' \
     --exclude='*.pyc' \
     --exclude='.git' \
     --exclude='*.tar.gz' \
-    api.py config.py main.py requirements.txt \
-    spider/ storage/ Dockerfile docker-compose.yml \
+    api.py config.py requirements.txt \
+    spider/ Dockerfile docker-compose.yml \
     nginx.conf deploy.sh
 
 # 2. 上传到服务器
