@@ -1,13 +1,13 @@
 # 微信油价服务器 (wx-oil-server)
 
-一个基于Python的油价信息API服务，提供全国油价查询、油价预测和加油站定位功能。
+一个基于Python的油价信息API服务，提供全国油价查询和油价预测功能。
 
 ## 功能特性
 
 - **油价查询**: 支持按省份、城市查询油价
 - **经纬度查询**: 通过经纬度自动定位所在省份并返回油价
 - **油价预测**: 提供油价趋势预测和调整窗口信息
-- **加油站定位**: 基于地理位置查找附近加油站
+- **油价预测**: 基于原油变化率的调价方向预测
 - **多数据源**: 支持东方财富、abapi等多个数据源
 
 ## API接口
@@ -66,12 +66,7 @@ GET /api/oil/province/广东
 GET /api/oil/prediction
 ```
 
-### 4. 附近加油站
-```http
-GET /api/station/nearby?longitude=116.405&latitude=39.905
-```
-
-### 5. 健康检查
+### 4. 健康检查
 ```http
 GET /api/health
 ```
@@ -98,7 +93,6 @@ docker-compose logs -f
 
 ### 环境变量
 - `API_TOKEN`: API访问令牌（默认：oil-server-2024）
-- `TENCENT_MAP_KEY`: 腾讯地图 WebService API Key（可选）。配置后附近加油站返回真实 POI 数据，未配置则使用内置静态数据
 
 ## 数据源
 

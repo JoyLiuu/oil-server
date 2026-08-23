@@ -1,10 +1,15 @@
 import re
 import logging
 from typing import Dict, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from bs4 import BeautifulSoup
+
+try:
+    from chinese_calendar import is_workday
+except ImportError:
+    is_workday = None
 
 from config import EASTMONEY_API_URL, REQUEST_HEADERS, REQUEST_TIMEOUT
 
@@ -12,8 +17,13 @@ logger = logging.getLogger(__name__)
 
 EASTMONEY_OIL_URL = "https://data.eastmoney.com/cjsj/yjtz/default.html"
 
+# 国家发改委成品油调价机制：每10个工作日调整一次
+ADJUST_INTERVAL_WORKDAYS = 10
 
-def fetch_prediction() -> Optional[Dict]:
+_calendar_warned = False
+
+
+def fetch_prediction() -> Dict:
     result = {
         "prediction_text": "",
         "change_rate": None,
@@ -128,7 +138,7 @@ def _fetch_history_from_api(result: Dict) -> bool:
         "sortColumns": "DIM_DATE",
         "sortTypes": "-1",
         "pageNumber": "1",
-        "pageSize": "10",
+        "pageSize": "12",
         "source": "WEB",
     }
 
@@ -182,6 +192,7 @@ def _fetch_history_from_api(result: Dict) -> bool:
 
 
 def _calc_next_window(history: list) -> str:
+    """根据最近一次调价日期推算下次调价窗口：上次调价日 + 10个工作日"""
     if not history:
         return ""
 
@@ -194,32 +205,36 @@ def _calc_next_window(history: list) -> str:
     except ValueError:
         return ""
 
-    year = last_date.year
-    windows = _get_adjustment_windows(year)
+    next_date = _add_workdays(last_date, ADJUST_INTERVAL_WORKDAYS)
+    if not next_date:
+        return ""
 
-    for window_date in windows:
-        if window_date > last_date_str:
-            return window_date
-
-    return ""
+    return next_date.strftime("%Y-%m-%d") + " 24:00"
 
 
-def _get_adjustment_windows(year: int) -> list:
-    windows = {
-        2026: [
-            "2026-01-06 24:00", "2026-01-20 24:00",
-            "2026-02-03 24:00", "2026-02-24 24:00",
-            "2026-03-09 24:00", "2026-03-23 24:00",
-            "2026-04-07 24:00", "2026-04-21 24:00",
-            "2026-05-08 24:00", "2026-05-21 24:00",
-            "2026-06-04 24:00", "2026-06-18 24:00",
-            "2026-07-03 24:00", "2026-07-17 24:00", "2026-07-31 24:00",
-            "2026-08-14 24:00", "2026-08-28 24:00",
-            "2026-09-11 24:00", "2026-09-24 24:00",
-            "2026-10-15 24:00", "2026-10-29 24:00",
-            "2026-11-12 24:00", "2026-11-26 24:00",
-            "2026-12-10 24:00", "2026-12-24 24:00",
-        ],
-    }
-    return windows.get(year, [])
+def _add_workdays(start_date: datetime, days: int) -> Optional[datetime]:
+    """返回 start_date 之后第 days 个工作日，自动跳过周末和法定节假日（含调休）"""
+    global _calendar_warned
+
+    cur = start_date
+    count = 0
+    while count < days:
+        cur += timedelta(days=1)
+        try:
+            if is_workday is not None:
+                workday = bool(is_workday(cur))
+            else:
+                raise NotImplementedError
+        except NotImplementedError:
+            if not _calendar_warned:
+                logger.warning(
+                    f"[油价预测] chinese-calendar 缺少 {cur.year} 年节假日数据，"
+                    "退化为仅跳过周末推算，结果可能偏差1-2天"
+                )
+                _calendar_warned = True
+            workday = cur.weekday() < 5
+
+        if workday:
+            count += 1
+    return cur
 
