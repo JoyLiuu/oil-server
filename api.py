@@ -349,10 +349,15 @@ def get_oil_prediction():
     }
     trend_label = trend_map.get(trend, "待定")
 
-    change_rate = result.get("change_rate") or 0
-    confidence = min(abs(change_rate) * 10, 99)
-    if confidence < 5:
-        confidence = 5
+    change_rate = result.get("change_rate")
+    if change_rate is not None:
+        confidence = round(min(abs(change_rate) * 10, 99), 1)
+        if confidence < 5:
+            confidence = 5
+    else:
+        # 无官方口径变化率时（爬取源直接给出调幅），按调幅绝对值给参考置信度
+        gas_change = abs(result.get("predict_gasoline_change") or 0)
+        confidence = round(min(40 + gas_change / 8, 90))
 
     status = trend if trend else "unknown"
     forecast = trend_label
@@ -391,6 +396,7 @@ def get_oil_prediction():
             "last_diesel_change": result.get("last_diesel_change"),
             "predict_gasoline_change": predict_gasoline,
             "predict_diesel_change": predict_diesel,
+            "predict_price_change": result.get("predict_price_change"),
             "history": result.get("history", []),
         },
     })
