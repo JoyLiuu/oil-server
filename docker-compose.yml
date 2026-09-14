@@ -1,6 +1,5 @@
 services:
   wx-oil-server:
-    build: .
     container_name: wx-oil-server
     expose:
       - "8000"

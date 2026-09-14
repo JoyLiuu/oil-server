@@ -24,15 +24,7 @@ SINA_FUTURES_KLINE_URL = (
     "https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20t=/"
     "GlobalFuturesService.getGlobalFuturesDailyKLine"
 )
-QIYOU_URL = "http://m.qiyoujiage.com/"
-QIYOU_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.9",
-}
+CHAJIAGE_URL = "https://www.chajiage.com/youjia/tiaozheng.html"
 
 # 国家发改委成品油调价机制：每10个工作日调整一次
 ADJUST_INTERVAL_WORKDAYS = 10
@@ -89,22 +81,47 @@ def fetch_prediction() -> Dict:
     if result["history"]:
         result["next_window_date"] = _calc_next_window(result["history"])
 
-    if not _fetch_prediction_from_qiyou(result):
-        logger.warning("[油价预测] qiyou 预测数据获取失败，尝试原油行情推算")
+    # 优先从查价格网获取准确的调价窗口时间
+    if not _fetch_prediction_from_chajiage(result):
+        logger.warning("[油价预测] chajiage 调价窗口获取失败")
 
-        closes = _fetch_crude_closes()
-        if closes and _compute_from_crude(result, closes):
-            pass
-        else:
-            logger.warning("[油价预测] 原油行情推算失败，回退到东财页面预测文本")
-            if not _fetch_prediction_from_page(result):
-                logger.warning("[油价预测] 页面预测数据获取失败")
+    # 原油行情推算：获取 trend、预测调幅、prediction_text（使用已校正的 next_window_date）
+    closes = _fetch_crude_closes()
+    if closes and _compute_from_crude(result, closes):
+        pass
+    else:
+        logger.warning("[油价预测] 原油行情推算失败，回退到东财页面预测文本")
+        if not _fetch_prediction_from_page(result):
+            logger.warning("[油价预测] 页面预测数据获取失败")
+
+    _normalize_prediction_text(result)
 
     with _cache_lock:
         _cache["result"] = result
         _cache["fetched_at"] = datetime.now()
 
     return dict(result)
+
+
+def _normalize_prediction_text(result: Dict) -> None:
+    """把 prediction_text 中过期的窗口日期替换为 next_window_date 的正确日期"""
+    text = result.get("prediction_text", "")
+    nwd = result.get("next_window_date", "")
+    if not text or not nwd:
+        return
+    nwd_date = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", nwd)
+    if not nwd_date:
+        return
+    target_month, target_day = int(nwd_date.group(2)), int(nwd_date.group(3))
+    old_match = re.search(r"(\d{1,2})月(\d{1,2})日\s*(?:24时|24:00)", text)
+    if not old_match:
+        return
+    old_month, old_day = int(old_match.group(1)), int(old_match.group(2))
+    if (old_month, old_day) == (target_month, target_day):
+        return
+    text = re.sub(r"\d{1,2}月\d{1,2}日\s*(?:24时|24:00)",
+                  f"{target_month}月{target_day}日24时", text, count=1)
+    result["prediction_text"] = text
 
 
 def _is_workday(d: date) -> bool:
@@ -122,63 +139,40 @@ def _is_workday(d: date) -> bool:
     return d.weekday() < 5
 
 
-def _fetch_prediction_from_qiyou(result: Dict) -> bool:
-    """爬取 qiyoujiage 每日更新的官方口径预测（tishiContent JS 变量）"""
+def _fetch_prediction_from_chajiage(result: Dict) -> bool:
+    """从查价格网获取准确的调价窗口时间（实时更新）"""
     try:
-        resp = requests.get(QIYOU_URL, headers=QIYOU_HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = requests.get(CHAJIAGE_URL, headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
-        resp.encoding = resp.apparent_encoding or "utf-8"
+        resp.encoding = "utf-8"
+        raw = resp.text
 
-        match = re.search(r'tishiContent\s*=\s*"([^"]+)"', resp.text)
+        # 提取 "下一轮油价调整窗口时间：XXXX年X月X日24时"
+        match = re.search(
+            r"下一轮油价调整窗口时间[：:]\s*(\d{4}年)?(\d{1,2})月(\d{1,2})日\s*24时",
+            raw,
+        )
         if not match:
-            logger.warning("[油价预测] qiyou 页面未找到 tishiContent")
+            logger.warning("[油价预测] chajiage 页面未找到下一轮调价窗口时间")
             return False
 
-        text = match.group(1)
-        text = text.replace("<br/>", " ").replace("<br>", " ").replace("&nbsp;", " ")
-        text = re.sub(r"\s+", " ", text).strip()
-        if not text:
+        month, day = int(match.group(2)), int(match.group(3))
+        today = datetime.now().date()
+        try:
+            window_date = date(today.year, month, day)
+        except ValueError:
             return False
 
-        if "上调" in text or "上涨" in text:
-            trend = "up"
-        elif "下调" in text or "下跌" in text:
-            trend = "down"
-        elif any(k in text for k in ("搁浅", "不作调整", "不做调整", "持平", "不调整")):
-            trend = "flat"
-        else:
-            logger.warning(f"[油价预测] qiyou 文本无法识别方向: {text}")
-            return False
+        if window_date >= today:
+            result["next_window_date"] = window_date.strftime("%Y-%m-%d") + " 24:00"
+            logger.info(f"[油价预测] chajiage 下次调价窗口: {result['next_window_date']}")
+            return True
 
-        result["prediction_text"] = text
-        result["trend"] = trend
-
-        ton_match = re.search(r"(?:上调|下调)\s*(\d+)\s*元/吨", text)
-        if ton_match and trend in ("up", "down"):
-            amount = int(ton_match.group(1))
-            signed = amount if trend == "up" else -amount
-            result["predict_gasoline_change"] = signed
-            result["predict_diesel_change"] = signed
-            result["predict_price_change"] = {
-                field: round(signed / liters, 2)
-                for field, liters in LITERS_PER_TON.items()
-            }
-
-        window_match = re.search(r"(\d{1,2})月(\d{1,2})日\s*(?:24时|24:00)", text)
-        if window_match:
-            month, day = int(window_match.group(1)), int(window_match.group(2))
-            today = datetime.now().date()
-            candidate = date(today.year, month, day)
-            if (candidate - today).days < -15:
-                candidate = date(today.year + 1, month, day)
-            if candidate >= today:
-                result["next_window_date"] = candidate.strftime("%Y-%m-%d") + " 24:00"
-
-        logger.info(f"[油价预测] qiyou 预测获取成功: {text}")
-        return True
+        logger.warning(f"[油价预测] chajiage 窗口日期已过: {window_date}")
+        return False
 
     except Exception as e:
-        logger.error(f"[油价预测] qiyou 爬取失败: {e}")
+        logger.error(f"[油价预测] chajiage 爬取失败: {e}")
         return False
 
 
