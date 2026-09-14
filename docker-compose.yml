@@ -1,5 +1,5 @@
 services:
-  oil-server:
+  wx-oil-server:
     build: .
     container_name: wx-oil-server
     expose:
