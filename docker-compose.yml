@@ -1,6 +1,7 @@
 services:
   wx-oil-server:
     container_name: wx-oil-server
+    image: wx-oil-server:latest
     expose:
       - "8000"
     environment:
