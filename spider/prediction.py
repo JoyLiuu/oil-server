@@ -171,7 +171,8 @@ def _fetch_prediction_from_qiyou(result: Dict) -> bool:
             candidate = date(today.year, month, day)
             if (candidate - today).days < -15:
                 candidate = date(today.year + 1, month, day)
-            result["next_window_date"] = candidate.strftime("%Y-%m-%d") + " 24:00"
+            if candidate >= today:
+                result["next_window_date"] = candidate.strftime("%Y-%m-%d") + " 24:00"
 
         logger.info(f"[油价预测] qiyou 预测获取成功: {text}")
         return True
@@ -494,6 +495,12 @@ def _calc_next_window(history: list) -> str:
     next_date = _add_workdays(last_date, ADJUST_INTERVAL_WORKDAYS)
     if not next_date:
         return ""
+
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    while next_date <= today:
+        next_date = _add_workdays(next_date, ADJUST_INTERVAL_WORKDAYS)
+        if not next_date:
+            return ""
 
     return next_date.strftime("%Y-%m-%d") + " 24:00"
 

@@ -1,9 +1,8 @@
 #!/bin/bash
 
-cd /opt/oil-server
+cd /opt/docker/oil-server
+docker build -t wx-oil-server .
 docker compose down
-docker rmi oil-server-oil-server
-docker rmi nginx:alpine
-rm -rf ssl
-./deploy.sh
-./setup-ssl.sh
+docker rmi wx-oil-server
+docker compose up -d
+docker logs -f wx-oil-server
